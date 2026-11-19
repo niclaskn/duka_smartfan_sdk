@@ -80,7 +80,13 @@ class DukaClient:
                 device_id, password, ip_address, onchange, allow_ip_change
             )
             self._devices[device_id] = device
-        self._send_get_firmware(device)
+        try:
+            self._send_get_firmware(device)
+        except ValueError:
+            # invalid id/password: do not leave it registered, the status
+            # polling would fail on it forever
+            self._devices.pop(device_id, None)
+            raise
         return device
 
     def _send_get_firmware(self, device: Device):

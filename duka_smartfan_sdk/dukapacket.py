@@ -145,11 +145,20 @@ class DukaPacket:
 
     def __add_byte(self, byte: int):
         """Add a byte to the packet"""
+        if not 0 <= byte <= 255:
+            raise ValueError(f"Packet byte must be in the range 0-255, got {byte}")
+        if self._pos >= self.maxsize:
+            raise ValueError(f"Packet exceeds the maximum size of {self.maxsize} bytes")
         self._data[self._pos] = byte
         self._pos += 1
 
     def __build_data(self, device_id: str, password: str):
         """Build a packet of the specified size"""
+        for name, value in (("device ID", device_id), ("password", password)):
+            if not value.isascii():
+                raise ValueError(f"The {name} must contain only ASCII characters")
+            if len(value) > 255:
+                raise ValueError(f"The {name} must be at most 255 characters long")
         self._data = bytearray(self.maxsize)
         self._pos = 0
         self.__add_byte(0xFD)
