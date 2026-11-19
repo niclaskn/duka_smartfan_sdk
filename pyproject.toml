@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "duka_smartfan_sdk"
-version = "0.2.1"
+version = "0.3.0"
 description = "Duka Smartfan Wifi ventilation SDK"
 readme = "README.md"
 license = "GPL-3.0-only"
@@ -27,5 +27,6 @@ packages = ["duka_smartfan_sdk"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 addopts = "--cov=duka_smartfan_sdk --cov-report=term-missing --cov-fail-under=80"
