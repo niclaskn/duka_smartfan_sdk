@@ -5,6 +5,7 @@ import logging
 import socket
 import threading
 import time
+from functools import partial
 from random import random
 from socket import SO_BROADCAST, SO_REUSEADDR, SOL_SOCKET
 
@@ -143,6 +144,19 @@ class DukaClient:
         self.__log_sent("DEFAULT_DEVICEID", packet.data)
         with DukaClient._mutex:
             self._sock.sendto(packet.data, (search_address, self._device_port))
+
+    async def search_devices_async(
+        self, wait: float = 2.0, search_address: str = "<broadcast>"
+    ) -> list[str]:
+        """Search for devices and return the sorted, unique device IDs found
+        within `wait` seconds."""
+        found: list[str] = []
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None, partial(self.search_devices, found.append, search_address)
+        )
+        await asyncio.sleep(wait)
+        return sorted(set(found))
 
     def turn_off(self, device: Device):
         """Turn off the specified device"""
