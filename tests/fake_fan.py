@@ -46,6 +46,12 @@ class FakeFan:
         self._thread = threading.Thread(target=self._serve, daemon=True)
         self._thread.start()
 
+    def send_reply(self, addr, params: bytes | None = None):
+        """Send an unsolicited status reply to addr (for tests)."""
+        if params is None:
+            params = b"".join(bytes([p]) + v for p, v in self.state.items())
+        self.sock.sendto(frame(self.device_id, self.password, RESPONSE, params), addr)
+
     def close(self):
         self._running = False
         self._thread.join()

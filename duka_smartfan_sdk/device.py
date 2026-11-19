@@ -14,10 +14,12 @@ class Device:
         password: str | None = None,
         ip_address: str = "<broadcast>",
         onchange: Callable[["Device"], None] | None = None,
+        allow_ip_change: bool = False,
     ):
         self._id = deviceid
         self._password = password
         self._ip_address = ip_address
+        self.allow_ip_change = allow_ip_change
         self._is_active: bool | None = None
         self._fan_speed: int | None = None
         self._humidity: int | None = None
@@ -43,6 +45,10 @@ class Device:
     def ip_address(self) -> str:
         """Return the IP of the device"""
         return self._ip_address
+
+    def pin_ip_address(self, ip_address: str) -> None:
+        """Set the IP address the device is expected to reply from."""
+        self._ip_address = ip_address
 
     @property
     def is_active(self) -> bool | None:

@@ -15,6 +15,13 @@ from .responsepacket import ResponsePacket
 
 _LOGGER = logging.getLogger(__name__)
 
+BROADCAST_ADDRESSES = {"<broadcast>", "255.255.255.255"}
+UNEXPECTED_SOURCE_WARN_INTERVAL_S = 60.0
+
+
+def _is_broadcast(ip: str) -> bool:
+    return ip in BROADCAST_ADDRESSES or ip.endswith(".255")
+
 
 class DukaClient:
     """Client object for making connection to the duka devices."""
@@ -38,6 +45,7 @@ class DukaClient:
         self._sock = None
         self._socket_listening = False
         self._socket_error = False
+        self._last_source_warning: dict[tuple[str, str], float] = {}
 
         self._notifyrunning = False
         self._notifythread = threading.Thread(target=self.__notify_fn)
@@ -56,12 +64,21 @@ class DukaClient:
         password: str | None = None,
         ip_address: str = "<broadcast>",
         onchange=None,
+        *,
+        allow_ip_change: bool = False,
     ) -> Device:
         """Add a new device. If the device already exist the current one will
-        be returned"""
+        be returned.
+
+        Replies are only accepted from the device's IP address. If the address
+        is a broadcast address, the first responder is pinned. Pass
+        allow_ip_change=True to let the device follow any source address
+        (e.g. DHCP changes); this lets any host on the LAN answer for it."""
         device: Device = self.get_device(device_id)
         if device is None:
-            device = Device(device_id, password, ip_address, onchange)
+            device = Device(
+                device_id, password, ip_address, onchange, allow_ip_change
+            )
             self._devices[device_id] = device
         self._send_get_firmware(device)
         return device
@@ -327,6 +344,8 @@ class DukaClient:
                     continue
                 device: Device = self._devices[packet.device_id]
                 ip_address = addr[0]
+                if not self._source_allowed(device, ip_address):
+                    continue
                 _LOGGER.debug(
                     "Received from %s for device %s: %s",
                     ip_address,
@@ -338,12 +357,38 @@ class DukaClient:
             self.__close_socket()
             self._notifyrunning = False
 
+    def _source_allowed(self, device: Device, source_ip: str) -> bool:
+        """Decide whether a reply from source_ip may update the device."""
+        if source_ip == device.ip_address:
+            return True
+        if device.allow_ip_change:
+            device.pin_ip_address(source_ip)
+            return True
+        if _is_broadcast(device.ip_address):
+            # first responder wins
+            device.pin_ip_address(source_ip)
+            return True
+        self._warn_rate_limited(device, source_ip)
+        return False
+
+    def _warn_rate_limited(self, device: Device, source_ip: str) -> None:
+        """Warn about a reply from an unexpected source, once a minute per source."""
+        key = (device.device_id, source_ip)
+        now = time.monotonic()
+        last = self._last_source_warning.get(key)
+        if last is not None and now - last < UNEXPECTED_SOURCE_WARN_INTERVAL_S:
+            return
+        self._last_source_warning[key] = now
+        _LOGGER.warning(
+            "Ignoring reply for device %s from unexpected address %s (expected %s)",
+            device.device_id,
+            source_ip,
+            device.ip_address,
+        )
+
     def update_device(self, device, ip_address: str, packet: ResponsePacket):
         """Update the device with data received. Called by the dukaclient"""
         haschange = False
-        if device._ip_address is not None and ip_address != device._ip_address:
-            device._ip_address = ip_address
-            haschange = True
         # use fan speed as proxy for "active"
         if packet.fan_speed is not None and bool(packet.fan_speed) != device._is_active:
             device._is_active = bool(packet.fan_speed)
