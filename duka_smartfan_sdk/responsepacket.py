@@ -1,6 +1,14 @@
 """Implements a class for the UDP data packet"""
 
+import logging
+
 from .dukapacket import DukaPacket
+
+_LOGGER = logging.getLogger(__name__)
+
+# Parameter IDs we have already warned about, so a chatty device does not
+# flood the log.
+_WARNED_PARAMS: set[int] = set()
 
 
 class ResponsePacket(DukaPacket):
@@ -123,17 +131,23 @@ class ResponsePacket(DukaPacket):
             parameter = self.read_byte()
             size = 1
             if parameter == 0xFE:
-                # change parameter size
+                # explicit size prefix: skip exactly `size` bytes, known or not
                 size = self.read_byte()
                 parameter = self.read_byte()
             else:
                 if parameter not in self.parameter_size:
-                    return False
+                    # Size unknown, so we cannot continue. Keep what we have.
+                    if parameter not in _WARNED_PARAMS:
+                        _WARNED_PARAMS.add(parameter)
+                        _LOGGER.warning(
+                            "Ignoring unknown parameter 0x%02X in reply", parameter
+                        )
+                    return True
                 size = self.parameter_size[parameter]
 
             if parameter == self.Parameters.ON_OFF.value:
                 self.is_on = self._data[self._pos] != 0
-            if parameter == self.Parameters.BATTERY_STATUS.value:
+            elif parameter == self.Parameters.BATTERY_STATUS.value:
                 self.battery_status = self._data[self._pos]
             elif parameter == self.Parameters.TEMPERATURE.value:
                 self.temperature = self._data[self._pos]
