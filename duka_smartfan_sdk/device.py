@@ -2,7 +2,7 @@
 
 import asyncio
 import time
-from typing import Callable
+from collections.abc import Callable
 
 
 class Device:
@@ -14,11 +14,15 @@ class Device:
         password: str | None = None,
         ip_address: str = "<broadcast>",
         onchange: Callable[["Device"], None] | None = None,
+        allow_ip_change: bool = False,
     ):
         self._id = deviceid
         self._password = password
         self._ip_address = ip_address
+        self.allow_ip_change = allow_ip_change
         self._is_active: bool | None = None
+        self._is_on: bool | None = None
+        self._battery_status: int | None = None
         self._fan_speed: int | None = None
         self._humidity: int | None = None
         self._temperature: int | None = None
@@ -44,10 +48,24 @@ class Device:
         """Return the IP of the device"""
         return self._ip_address
 
+    def pin_ip_address(self, ip_address: str) -> None:
+        """Set the IP address the device is expected to reply from."""
+        self._ip_address = ip_address
+
     @property
     def is_active(self) -> bool | None:
         """Return whether the device is active"""
         return self._is_active
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return the on/off state reported by the device"""
+        return self._is_on
+
+    @property
+    def battery_status(self) -> int | None:
+        """Return the battery status (0 discharged, 1 normal rate)"""
+        return self._battery_status
 
     @property
     def fan_speed(self) -> int | None:
@@ -92,6 +110,11 @@ class Device:
             time.sleep(0.1)
 
     async def wait_for_initialize_async(self) -> None:
+        """Wait up to 2 s for the device to initialize, without resending.
+
+        Prefer DukaClient.wait_for_initialize_async, which resends the
+        firmware request until the device answers.
+        """
         timeout = time.time() + 2
         while self.firmware_version is None and time.time() < timeout:
             await asyncio.sleep(0.1)

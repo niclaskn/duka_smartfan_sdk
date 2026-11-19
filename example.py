@@ -39,7 +39,7 @@ def main():
     device: Device = client.validate_device(device_id)
     if device is None:
         print("Device does not respond")
-        exit(1)
+        sys.exit(1)
     device = client.add_device(device_id, password="", onchange=onchange)
     print("Device added")
 
@@ -68,7 +68,7 @@ def main():
     client.close()
     print("Done")
 
-    exit(0)
+    sys.exit(0)
 
 
 if __name__ == "__main__":

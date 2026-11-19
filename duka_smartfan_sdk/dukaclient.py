@@ -1,13 +1,26 @@
 """Implements a client for making a udp connection to the duka one devices"""
 
+import asyncio
+import logging
 import socket
 import threading
 import time
+from functools import partial
+from random import random
 from socket import SO_BROADCAST, SO_REUSEADDR, SOL_SOCKET
 
 from .device import Device
 from .dukapacket import DukaPacket
 from .responsepacket import ResponsePacket
+
+_LOGGER = logging.getLogger(__name__)
+
+BROADCAST_ADDRESSES = {"<broadcast>", "255.255.255.255"}
+UNEXPECTED_SOURCE_WARN_INTERVAL_S = 60.0
+
+
+def _is_broadcast(ip: str) -> bool:
+    return ip in BROADCAST_ADDRESSES or ip.endswith(".255")
 
 
 class DukaClient:
@@ -15,10 +28,24 @@ class DukaClient:
 
     _mutex = threading.Lock()
 
-    def __init__(self):
+    INIT_TIMEOUT_S = 10.0
+    RESEND_INTERVAL_S = 1.0
+    POLL_INTERVAL_S = 0.1
+
+    def __init__(
+        self,
+        device_port: int = 4000,
+        listen_port: int = 4000,
+        bind_address: str = "0.0.0.0",
+    ):
+        self._device_port = device_port
+        self._listen_port = listen_port
+        self._bind_address = bind_address
         self._devices = {}
         self._sock = None
         self._socket_listening = False
+        self._socket_error = False
+        self._last_source_warning: dict[tuple[str, str], float] = {}
 
         self._notifyrunning = False
         self._notifythread = threading.Thread(target=self.__notify_fn)
@@ -37,17 +64,57 @@ class DukaClient:
         password: str | None = None,
         ip_address: str = "<broadcast>",
         onchange=None,
+        *,
+        allow_ip_change: bool = False,
     ) -> Device:
         """Add a new device. If the device already exist the current one will
-        be returned"""
+        be returned.
+
+        Replies are only accepted from the device's IP address. If the address
+        is a broadcast address, the first responder is pinned. Pass
+        allow_ip_change=True to let the device follow any source address
+        (e.g. DHCP changes); this lets any host on the LAN answer for it."""
         device: Device = self.get_device(device_id)
         if device is None:
-            device = Device(device_id, password, ip_address, onchange)
+            device = Device(
+                device_id, password, ip_address, onchange, allow_ip_change
+            )
             self._devices[device_id] = device
+        try:
+            self._send_get_firmware(device)
+        except ValueError:
+            # invalid id/password: do not leave it registered, the status
+            # polling would fail on it forever
+            self._devices.pop(device_id, None)
+            raise
+        return device
+
+    def _send_get_firmware(self, device: Device):
+        """Send a get firmware request to the device."""
         packet = DukaPacket()
         packet.initialize_get_firmware_cmd(device)
         self.__send_data(device, packet.data)
-        return device
+
+    async def wait_for_initialize_async(
+        self, device: Device | None, timeout: float = INIT_TIMEOUT_S
+    ) -> bool:
+        """Wait until the device has answered the firmware request.
+
+        UDP is lossy, so the request is resent (with jitter) until the device
+        answers or the timeout expires. Returns True if the device initialized.
+        """
+        if device is None:
+            return False
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        next_send = loop.time() + self.RESEND_INTERVAL_S - random()
+        while device.firmware_version is None and loop.time() < deadline:
+            await asyncio.sleep(self.POLL_INTERVAL_S)
+            if loop.time() >= next_send:
+                # __send_data may block for up to 3 s
+                await loop.run_in_executor(None, self._send_get_firmware, device)
+                next_send = loop.time() + self.RESEND_INTERVAL_S - random()
+        return device.firmware_version is not None
 
     def remove_device(self, device_id: str | Device):
         """Remove an existing device. Accepts a device ID string or a Device object."""
@@ -68,13 +135,27 @@ class DukaClient:
         """Return the number of devices"""
         return len(self._devices)
 
-    def search_devices(self, callback):
+    def search_devices(self, callback, search_address: str = "<broadcast>"):
         self._found_device_callback = callback
         packet = DukaPacket()
         packet.initialize_search_cmd()
         self.__wait_for_socket()
+        self.__log_sent("DEFAULT_DEVICEID", packet.data)
         with DukaClient._mutex:
-            self._sock.sendto(packet.data, ("<broadcast>", 4000))
+            self._sock.sendto(packet.data, (search_address, self._device_port))
+
+    async def search_devices_async(
+        self, wait: float = 2.0, search_address: str = "<broadcast>"
+    ) -> list[str]:
+        """Search for devices and return the sorted, unique device IDs found
+        within `wait` seconds."""
+        found: list[str] = []
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None, partial(self.search_devices, found.append, search_address)
+        )
+        await asyncio.sleep(wait)
+        return sorted(set(found))
 
     def turn_off(self, device: Device):
         """Turn off the specified device"""
@@ -159,8 +240,9 @@ class DukaClient:
         Protect it with a mutex to prevent multiple threads doint it at the
         same time"""
         self.__wait_for_socket()
+        self.__log_sent(device.device_id, data)
         with DukaClient._mutex:
-            self._sock.sendto(data, (device.ip_address, 4000))
+            self._sock.sendto(data, (device.ip_address, self._device_port))
 
     def __wait_for_socket(self):
         """Wait for notify thread to create socket"""
@@ -172,18 +254,41 @@ class DukaClient:
             if self._socket_listening:
                 return
             if time.time() > timeout:
-                raise Exception("Timeout waiting for socket connection")
+                _LOGGER.warning("Timed out waiting for the socket to be opened")
+                raise TimeoutError("Timeout waiting for socket connection")
 
-    def __print_data(self, data):
-        """Print data in hex - for debugging purpose"""
-        print(" ".join("{:02x}".format(x) for x in data))
+    @staticmethod
+    def __log_sent(device_id: str, data):
+        """Log a sent packet at debug level.
+
+        Only the function and parameter section are logged. Every packet
+        carries the device password in plain text, so raw bytes must never be
+        logged.
+        """
+        if not _LOGGER.isEnabledFor(logging.DEBUG):
+            return
+        try:
+            pos = 3
+            pos += 1 + data[pos]  # device id
+            pos += 1 + data[pos]  # password
+            func = data[pos]
+            params = " ".join(f"{x:02x}" for x in data[pos + 1 : -2])
+        except IndexError:
+            _LOGGER.debug("Sending malformed packet for device %s", device_id)
+            return
+        _LOGGER.debug(
+            "Sending to device %s: function 0x%02x, parameters [%s]",
+            device_id,
+            func,
+            params,
+        )
 
     def __open_socket(self):
         """Open the socket and set the  options on the socket"""
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._sock.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
         self._sock.setsockopt(SOL_SOCKET, SO_BROADCAST, 1)
-        self._sock.bind(("0.0.0.0", 4000))
+        self._sock.bind((self._bind_address, self._listen_port))
         self._sock.settimeout(1.0)
         self._socket_listening = True
 
@@ -204,7 +309,12 @@ class DukaClient:
         while self._notifyrunning and not self._socket_listening:
             try:
                 self.__open_socket()
-            except OSError:
+                if self._socket_error:
+                    self._socket_error = False
+                    _LOGGER.info("Socket reopened after an error")
+            except OSError as err:
+                self._socket_error = True
+                _LOGGER.debug("Could not open socket: %s", err)
                 self.__close_socket()
                 # wait 1 sec and try again
                 time.sleep(1)
@@ -217,14 +327,16 @@ class DukaClient:
         try:
             data, addr = self._sock.recvfrom(1024)
             return (data, addr)
-        except socket.timeout:
+        except TimeoutError:
             try:
                 self.__update_all_device_status()
-            except socket.error:
+            except OSError:
                 # recreate soket on error
+                self._socket_error = True
                 self.__close_socket()
-        except socket.error:
+        except OSError:
             # recreate soket on error
+            self._socket_error = True
             self.__close_socket()
         return (None, None)
 
@@ -239,7 +351,6 @@ class DukaClient:
                 data, addr = self.__receive_data()
                 if data is None:
                     continue
-                # self.__print_data(data) <-- for debugging
                 packet = ResponsePacket()
                 if not packet.initialize_from_data(data):
                     continue
@@ -252,20 +363,63 @@ class DukaClient:
                     continue
                 device: Device = self._devices[packet.device_id]
                 ip_address = addr[0]
+                if not self._source_allowed(device, ip_address):
+                    continue
+                _LOGGER.debug(
+                    "Received from %s for device %s: %s",
+                    ip_address,
+                    packet.device_id,
+                    packet.describe_fields(),
+                )
                 self.update_device(device, ip_address, packet)
         finally:
             self.__close_socket()
             self._notifyrunning = False
 
+    def _source_allowed(self, device: Device, source_ip: str) -> bool:
+        """Decide whether a reply from source_ip may update the device."""
+        if source_ip == device.ip_address:
+            return True
+        if device.allow_ip_change:
+            device.pin_ip_address(source_ip)
+            return True
+        if _is_broadcast(device.ip_address):
+            # first responder wins
+            device.pin_ip_address(source_ip)
+            return True
+        self._warn_rate_limited(device, source_ip)
+        return False
+
+    def _warn_rate_limited(self, device: Device, source_ip: str) -> None:
+        """Warn about a reply from an unexpected source, once a minute per source."""
+        key = (device.device_id, source_ip)
+        now = time.monotonic()
+        last = self._last_source_warning.get(key)
+        if last is not None and now - last < UNEXPECTED_SOURCE_WARN_INTERVAL_S:
+            return
+        self._last_source_warning[key] = now
+        _LOGGER.warning(
+            "Ignoring reply for device %s from unexpected address %s (expected %s)",
+            device.device_id,
+            source_ip,
+            device.ip_address,
+        )
+
     def update_device(self, device, ip_address: str, packet: ResponsePacket):
         """Update the device with data received. Called by the dukaclient"""
         haschange = False
-        if device._ip_address is not None and ip_address != device._ip_address:
-            device._ip_address = ip_address
-            haschange = True
         # use fan speed as proxy for "active"
         if packet.fan_speed is not None and bool(packet.fan_speed) != device._is_active:
             device._is_active = bool(packet.fan_speed)
+            haschange = True
+        if packet.is_on is not None and packet.is_on != device._is_on:
+            device._is_on = packet.is_on
+            haschange = True
+        if (
+            packet.battery_status is not None
+            and packet.battery_status != device._battery_status
+        ):
+            device._battery_status = packet.battery_status
             haschange = True
         if packet.humidity is not None and packet.humidity != device._humidity:
             device._humidity = packet.humidity
@@ -286,4 +440,3 @@ class DukaClient:
         # changes all the time
         if packet.fan_speed is not None and packet.fan_speed != device._fan_speed:
             device._fan_speed = packet.fan_speed
-        return

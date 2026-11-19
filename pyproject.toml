@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "duka_smartfan_sdk"
-version = "0.2.1"
+version = "0.3.0"
 description = "Duka Smartfan Wifi ventilation SDK"
 readme = "README.md"
 license = "GPL-3.0-only"
@@ -18,3 +18,15 @@ authors = [
 Homepage = "https://github.com/syre/duka_smartfan_sdk"
 Repository = "https://github.com/syre/duka_smartfan_sdk"
 Issues = "https://github.com/syre/duka_smartfan_sdk/issues"
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "pytest-cov>=5", "ruff>=0.6"]
+
+[tool.setuptools]
+packages = ["duka_smartfan_sdk"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+addopts = "--cov=duka_smartfan_sdk --cov-report=term-missing --cov-fail-under=80"

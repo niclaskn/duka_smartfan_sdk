@@ -1,12 +1,21 @@
 """Implements a class for the UDP data packet"""
 
+import logging
+from typing import ClassVar
+
 from .dukapacket import DukaPacket
+
+_LOGGER = logging.getLogger(__name__)
+
+# Parameter IDs we have already warned about, so a chatty device does not
+# flood the log.
+_WARNED_PARAMS: set[int] = set()
 
 
 class ResponsePacket(DukaPacket):
     """A udp data packet from the duka device."""
 
-    parameter_size = {
+    parameter_size: ClassVar[dict[int, int]] = {
         0x01: 1,  # On off 0-2 (off, on, invert)
         0x02: 1,  # Battery status 0-1 (discharged, normal rate)
         0x03: 1,  # 24 hour mode 0-1 (off, on, invert)
@@ -56,7 +65,7 @@ class ResponsePacket(DukaPacket):
     }
 
     def __init__(self):
-        super(ResponsePacket, self).__init__()
+        super().__init__()
         self.device_id = None
         self.device_password = None
         self.is_on = None
@@ -77,10 +86,12 @@ class ResponsePacket(DukaPacket):
             self._data = data
             size = len(data)
             if size < 4 or not self.is_header_ok():
+                _LOGGER.debug("Dropping reply: bad header or too short (%d bytes)", size)
                 return False
             checksum = self.calc_checksum(size - 2)
             datachecksum = self._data[size - 2] + (self._data[size - 1] << 8)
             if checksum != datachecksum:
+                _LOGGER.debug("Dropping reply: checksum mismatch")
                 return False
             self.device_id = self.read_string()
             self.device_password = self.read_string()
@@ -88,8 +99,25 @@ class ResponsePacket(DukaPacket):
             if func != self.Func.RESPONSE.value:
                 return False
             return self.read_parameters()
-        except Exception:
+        except (IndexError, ValueError):
             return False
+
+    def describe_fields(self) -> str:
+        """Return the parsed fields as text. Never includes the password."""
+        names = (
+            "is_on",
+            "battery_status",
+            "temperature",
+            "fan_speed",
+            "humidity",
+            "firmware_version",
+            "firmware_date",
+            "unit_type",
+            "search_device_id",
+        )
+        return ", ".join(
+            f"{n}={getattr(self, n)}" for n in names if getattr(self, n) is not None
+        )
 
     def is_header_ok(self):
         if self.read_byte() != 0xFD or self.read_byte() != 0xFD:
@@ -122,18 +150,28 @@ class ResponsePacket(DukaPacket):
         while self._pos < len(self._data) - 3:
             parameter = self.read_byte()
             size = 1
+            if parameter == 0xFD:
+                # "parameter not supported" marker: 0xFD <param>, no value follows
+                _LOGGER.debug("Device does not support parameter 0x%02X", self.read_byte())
+                continue
             if parameter == 0xFE:
-                # change parameter size
+                # explicit size prefix: skip exactly `size` bytes, known or not
                 size = self.read_byte()
                 parameter = self.read_byte()
             else:
                 if parameter not in self.parameter_size:
-                    return False
+                    # Size unknown, so we cannot continue. Keep what we have.
+                    if parameter not in _WARNED_PARAMS:
+                        _WARNED_PARAMS.add(parameter)
+                        _LOGGER.warning(
+                            "Ignoring unknown parameter 0x%02X in reply", parameter
+                        )
+                    return True
                 size = self.parameter_size[parameter]
 
             if parameter == self.Parameters.ON_OFF.value:
                 self.is_on = self._data[self._pos] != 0
-            if parameter == self.Parameters.BATTERY_STATUS.value:
+            elif parameter == self.Parameters.BATTERY_STATUS.value:
                 self.battery_status = self._data[self._pos]
             elif parameter == self.Parameters.TEMPERATURE.value:
                 self.temperature = self._data[self._pos]

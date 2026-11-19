@@ -5,3 +5,10 @@
 __pycache__
 build
 .venv
+.coverage
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.fan.env
+probe-*.txt
+app-capture.txt
