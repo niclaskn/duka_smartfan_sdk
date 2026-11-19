@@ -13,7 +13,6 @@ from .device import Device
 from .dukapacket import DukaPacket
 from .responsepacket import ResponsePacket
 
-
 _LOGGER = logging.getLogger(__name__)
 
 BROADCAST_ADDRESSES = {"<broadcast>", "255.255.255.255"}
@@ -441,4 +440,3 @@ class DukaClient:
         # changes all the time
         if packet.fan_speed is not None and packet.fan_speed != device._fan_speed:
             device._fan_speed = packet.fan_speed
-        return

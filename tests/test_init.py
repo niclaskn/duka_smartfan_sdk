@@ -1,4 +1,3 @@
-import pytest
 
 from duka_smartfan_sdk.dukaclient import DukaClient
 from tests.fake_fan import FakeFan

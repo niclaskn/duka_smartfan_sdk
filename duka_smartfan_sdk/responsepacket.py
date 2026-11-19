@@ -1,6 +1,7 @@
 """Implements a class for the UDP data packet"""
 
 import logging
+from typing import ClassVar
 
 from .dukapacket import DukaPacket
 
@@ -14,7 +15,7 @@ _WARNED_PARAMS: set[int] = set()
 class ResponsePacket(DukaPacket):
     """A udp data packet from the duka device."""
 
-    parameter_size = {
+    parameter_size: ClassVar[dict[int, int]] = {
         0x01: 1,  # On off 0-2 (off, on, invert)
         0x02: 1,  # Battery status 0-1 (discharged, normal rate)
         0x03: 1,  # 24 hour mode 0-1 (off, on, invert)
@@ -64,7 +65,7 @@ class ResponsePacket(DukaPacket):
     }
 
     def __init__(self):
-        super(ResponsePacket, self).__init__()
+        super().__init__()
         self.device_id = None
         self.device_password = None
         self.is_on = None
@@ -98,7 +99,7 @@ class ResponsePacket(DukaPacket):
             if func != self.Func.RESPONSE.value:
                 return False
             return self.read_parameters()
-        except Exception:
+        except (IndexError, ValueError):
             return False
 
     def describe_fields(self) -> str:
