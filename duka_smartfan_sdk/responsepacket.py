@@ -85,10 +85,12 @@ class ResponsePacket(DukaPacket):
             self._data = data
             size = len(data)
             if size < 4 or not self.is_header_ok():
+                _LOGGER.debug("Dropping reply: bad header or too short (%d bytes)", size)
                 return False
             checksum = self.calc_checksum(size - 2)
             datachecksum = self._data[size - 2] + (self._data[size - 1] << 8)
             if checksum != datachecksum:
+                _LOGGER.debug("Dropping reply: checksum mismatch")
                 return False
             self.device_id = self.read_string()
             self.device_password = self.read_string()
@@ -98,6 +100,23 @@ class ResponsePacket(DukaPacket):
             return self.read_parameters()
         except Exception:
             return False
+
+    def describe_fields(self) -> str:
+        """Return the parsed fields as text. Never includes the password."""
+        names = (
+            "is_on",
+            "battery_status",
+            "temperature",
+            "fan_speed",
+            "humidity",
+            "firmware_version",
+            "firmware_date",
+            "unit_type",
+            "search_device_id",
+        )
+        return ", ".join(
+            f"{n}={getattr(self, n)}" for n in names if getattr(self, n) is not None
+        )
 
     def is_header_ok(self):
         if self.read_byte() != 0xFD or self.read_byte() != 0xFD:

@@ -1,6 +1,7 @@
 """Implements a client for making a udp connection to the duka one devices"""
 
 import asyncio
+import logging
 import socket
 import threading
 import time
@@ -10,6 +11,9 @@ from socket import SO_BROADCAST, SO_REUSEADDR, SOL_SOCKET
 from .device import Device
 from .dukapacket import DukaPacket
 from .responsepacket import ResponsePacket
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class DukaClient:
@@ -33,6 +37,7 @@ class DukaClient:
         self._devices = {}
         self._sock = None
         self._socket_listening = False
+        self._socket_error = False
 
         self._notifyrunning = False
         self._notifythread = threading.Thread(target=self.__notify_fn)
@@ -112,6 +117,7 @@ class DukaClient:
         packet = DukaPacket()
         packet.initialize_search_cmd()
         self.__wait_for_socket()
+        self.__log_sent("DEFAULT_DEVICEID", packet.data)
         with DukaClient._mutex:
             self._sock.sendto(packet.data, (search_address, self._device_port))
 
@@ -198,6 +204,7 @@ class DukaClient:
         Protect it with a mutex to prevent multiple threads doint it at the
         same time"""
         self.__wait_for_socket()
+        self.__log_sent(device.device_id, data)
         with DukaClient._mutex:
             self._sock.sendto(data, (device.ip_address, self._device_port))
 
@@ -211,11 +218,34 @@ class DukaClient:
             if self._socket_listening:
                 return
             if time.time() > timeout:
+                _LOGGER.warning("Timed out waiting for the socket to be opened")
                 raise Exception("Timeout waiting for socket connection")
 
-    def __print_data(self, data):
-        """Print data in hex - for debugging purpose"""
-        print(" ".join("{:02x}".format(x) for x in data))
+    @staticmethod
+    def __log_sent(device_id: str, data):
+        """Log a sent packet at debug level.
+
+        Only the function and parameter section are logged. Every packet
+        carries the device password in plain text, so raw bytes must never be
+        logged.
+        """
+        if not _LOGGER.isEnabledFor(logging.DEBUG):
+            return
+        try:
+            pos = 3
+            pos += 1 + data[pos]  # device id
+            pos += 1 + data[pos]  # password
+            func = data[pos]
+            params = " ".join(f"{x:02x}" for x in data[pos + 1 : -2])
+        except IndexError:
+            _LOGGER.debug("Sending malformed packet for device %s", device_id)
+            return
+        _LOGGER.debug(
+            "Sending to device %s: function 0x%02x, parameters [%s]",
+            device_id,
+            func,
+            params,
+        )
 
     def __open_socket(self):
         """Open the socket and set the  options on the socket"""
@@ -243,7 +273,12 @@ class DukaClient:
         while self._notifyrunning and not self._socket_listening:
             try:
                 self.__open_socket()
-            except OSError:
+                if self._socket_error:
+                    self._socket_error = False
+                    _LOGGER.info("Socket reopened after an error")
+            except OSError as err:
+                self._socket_error = True
+                _LOGGER.debug("Could not open socket: %s", err)
                 self.__close_socket()
                 # wait 1 sec and try again
                 time.sleep(1)
@@ -261,9 +296,11 @@ class DukaClient:
                 self.__update_all_device_status()
             except socket.error:
                 # recreate soket on error
+                self._socket_error = True
                 self.__close_socket()
         except socket.error:
             # recreate soket on error
+            self._socket_error = True
             self.__close_socket()
         return (None, None)
 
@@ -278,7 +315,6 @@ class DukaClient:
                 data, addr = self.__receive_data()
                 if data is None:
                     continue
-                # self.__print_data(data) <-- for debugging
                 packet = ResponsePacket()
                 if not packet.initialize_from_data(data):
                     continue
@@ -291,6 +327,12 @@ class DukaClient:
                     continue
                 device: Device = self._devices[packet.device_id]
                 ip_address = addr[0]
+                _LOGGER.debug(
+                    "Received from %s for device %s: %s",
+                    ip_address,
+                    packet.device_id,
+                    packet.describe_fields(),
+                )
                 self.update_device(device, ip_address, packet)
         finally:
             self.__close_socket()
