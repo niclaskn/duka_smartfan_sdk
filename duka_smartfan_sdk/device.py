@@ -21,6 +21,8 @@ class Device:
         self._ip_address = ip_address
         self.allow_ip_change = allow_ip_change
         self._is_active: bool | None = None
+        self._is_on: bool | None = None
+        self._battery_status: int | None = None
         self._fan_speed: int | None = None
         self._humidity: int | None = None
         self._temperature: int | None = None
@@ -54,6 +56,16 @@ class Device:
     def is_active(self) -> bool | None:
         """Return whether the device is active"""
         return self._is_active
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return the on/off state reported by the device"""
+        return self._is_on
+
+    @property
+    def battery_status(self) -> int | None:
+        """Return the battery status (0 discharged, 1 normal rate)"""
+        return self._battery_status
 
     @property
     def fan_speed(self) -> int | None:

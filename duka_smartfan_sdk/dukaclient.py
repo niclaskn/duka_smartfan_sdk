@@ -413,6 +413,15 @@ class DukaClient:
         if packet.fan_speed is not None and bool(packet.fan_speed) != device._is_active:
             device._is_active = bool(packet.fan_speed)
             haschange = True
+        if packet.is_on is not None and packet.is_on != device._is_on:
+            device._is_on = packet.is_on
+            haschange = True
+        if (
+            packet.battery_status is not None
+            and packet.battery_status != device._battery_status
+        ):
+            device._battery_status = packet.battery_status
+            haschange = True
         if packet.humidity is not None and packet.humidity != device._humidity:
             device._humidity = packet.humidity
             haschange = True

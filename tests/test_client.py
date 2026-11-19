@@ -38,3 +38,15 @@ def test_search_devices(client, fan):
     client.search_devices(found.append, "127.0.0.1")
     assert wait_for(lambda: found)
     assert found == [fan.device_id]
+
+
+def test_on_off_state_and_battery_status(client, fan):
+    changes = []
+    device = client.add_device(fan.device_id, "1111", "127.0.0.1", changes.append)
+    assert wait_for(lambda: device.is_on is not None)
+    assert device.is_on is True
+    assert device.battery_status == 1
+    assert changes  # reported as a change event
+
+    fan.state[0x01] = b"\x00"
+    assert wait_for(lambda: device.is_on is False)
