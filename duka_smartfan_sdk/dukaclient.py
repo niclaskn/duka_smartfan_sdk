@@ -15,7 +15,15 @@ class DukaClient:
 
     _mutex = threading.Lock()
 
-    def __init__(self):
+    def __init__(
+        self,
+        device_port: int = 4000,
+        listen_port: int = 4000,
+        bind_address: str = "0.0.0.0",
+    ):
+        self._device_port = device_port
+        self._listen_port = listen_port
+        self._bind_address = bind_address
         self._devices = {}
         self._sock = None
         self._socket_listening = False
@@ -68,13 +76,13 @@ class DukaClient:
         """Return the number of devices"""
         return len(self._devices)
 
-    def search_devices(self, callback):
+    def search_devices(self, callback, search_address: str = "<broadcast>"):
         self._found_device_callback = callback
         packet = DukaPacket()
         packet.initialize_search_cmd()
         self.__wait_for_socket()
         with DukaClient._mutex:
-            self._sock.sendto(packet.data, ("<broadcast>", 4000))
+            self._sock.sendto(packet.data, (search_address, self._device_port))
 
     def turn_off(self, device: Device):
         """Turn off the specified device"""
@@ -160,7 +168,7 @@ class DukaClient:
         same time"""
         self.__wait_for_socket()
         with DukaClient._mutex:
-            self._sock.sendto(data, (device.ip_address, 4000))
+            self._sock.sendto(data, (device.ip_address, self._device_port))
 
     def __wait_for_socket(self):
         """Wait for notify thread to create socket"""
@@ -183,7 +191,7 @@ class DukaClient:
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._sock.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
         self._sock.setsockopt(SOL_SOCKET, SO_BROADCAST, 1)
-        self._sock.bind(("0.0.0.0", 4000))
+        self._sock.bind((self._bind_address, self._listen_port))
         self._sock.settimeout(1.0)
         self._socket_listening = True
 
