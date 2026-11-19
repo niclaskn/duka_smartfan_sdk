@@ -83,7 +83,7 @@ class FakeFan:
         while self._running:
             try:
                 data, addr = self.sock.recvfrom(1024)
-            except socket.timeout:
+            except TimeoutError:
                 continue
             self.received.append(data)
             if self.drop_first > 0:

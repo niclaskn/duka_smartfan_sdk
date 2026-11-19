@@ -256,7 +256,7 @@ class DukaClient:
                 return
             if time.time() > timeout:
                 _LOGGER.warning("Timed out waiting for the socket to be opened")
-                raise Exception("Timeout waiting for socket connection")
+                raise TimeoutError("Timeout waiting for socket connection")
 
     @staticmethod
     def __log_sent(device_id: str, data):
@@ -328,14 +328,14 @@ class DukaClient:
         try:
             data, addr = self._sock.recvfrom(1024)
             return (data, addr)
-        except socket.timeout:
+        except TimeoutError:
             try:
                 self.__update_all_device_status()
-            except socket.error:
+            except OSError:
                 # recreate soket on error
                 self._socket_error = True
                 self.__close_socket()
-        except socket.error:
+        except OSError:
             # recreate soket on error
             self._socket_error = True
             self.__close_socket()

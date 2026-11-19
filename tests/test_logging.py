@@ -56,6 +56,6 @@ def test_socket_wait_timeout_warns(caplog):
     client = DukaClient(device_port=9, listen_port=0, bind_address="127.0.0.1")
     client.close()  # notify thread gone, so the socket never comes back
     with caplog.at_level(logging.WARNING, logger="duka_smartfan_sdk"):
-        with pytest.raises(Exception, match="Timeout waiting for socket"):
+        with pytest.raises(TimeoutError, match="Timeout waiting for socket"):
             client.search_devices(lambda _id: None, "127.0.0.1")
     assert any("socket" in r.getMessage().lower() for r in caplog.records)
