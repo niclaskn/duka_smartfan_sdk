@@ -92,6 +92,11 @@ class Device:
             time.sleep(0.1)
 
     async def wait_for_initialize_async(self) -> None:
+        """Wait up to 2 s for the device to initialize, without resending.
+
+        Prefer DukaClient.wait_for_initialize_async, which resends the
+        firmware request until the device answers.
+        """
         timeout = time.time() + 2
         while self.firmware_version is None and time.time() < timeout:
             await asyncio.sleep(0.1)

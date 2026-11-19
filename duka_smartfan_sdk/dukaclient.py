@@ -1,8 +1,10 @@
 """Implements a client for making a udp connection to the duka one devices"""
 
+import asyncio
 import socket
 import threading
 import time
+from random import random
 from socket import SO_BROADCAST, SO_REUSEADDR, SOL_SOCKET
 
 from .device import Device
@@ -14,6 +16,10 @@ class DukaClient:
     """Client object for making connection to the duka devices."""
 
     _mutex = threading.Lock()
+
+    INIT_TIMEOUT_S = 10.0
+    RESEND_INTERVAL_S = 1.0
+    POLL_INTERVAL_S = 0.1
 
     def __init__(
         self,
@@ -52,10 +58,35 @@ class DukaClient:
         if device is None:
             device = Device(device_id, password, ip_address, onchange)
             self._devices[device_id] = device
+        self._send_get_firmware(device)
+        return device
+
+    def _send_get_firmware(self, device: Device):
+        """Send a get firmware request to the device."""
         packet = DukaPacket()
         packet.initialize_get_firmware_cmd(device)
         self.__send_data(device, packet.data)
-        return device
+
+    async def wait_for_initialize_async(
+        self, device: Device | None, timeout: float = INIT_TIMEOUT_S
+    ) -> bool:
+        """Wait until the device has answered the firmware request.
+
+        UDP is lossy, so the request is resent (with jitter) until the device
+        answers or the timeout expires. Returns True if the device initialized.
+        """
+        if device is None:
+            return False
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        next_send = loop.time() + self.RESEND_INTERVAL_S - random()
+        while device.firmware_version is None and loop.time() < deadline:
+            await asyncio.sleep(self.POLL_INTERVAL_S)
+            if loop.time() >= next_send:
+                # __send_data may block for up to 3 s
+                await loop.run_in_executor(None, self._send_get_firmware, device)
+                next_send = loop.time() + self.RESEND_INTERVAL_S - random()
+        return device.firmware_version is not None
 
     def remove_device(self, device_id: str | Device):
         """Remove an existing device. Accepts a device ID string or a Device object."""
