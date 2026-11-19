@@ -44,3 +44,21 @@ def test_battery_and_on_off_parsed_separately():
     assert ok is True
     assert packet.is_on is True
     assert packet.battery_status == 0
+
+
+def test_unsupported_marker_is_skipped():
+    """Real fan replies 0xFD <param> for parameters it lacks (e.g. motion 0x0B)."""
+    body = bytes([0x2E, 50, 0xFD, 0x0B, 0xFD, 0x12, 0x31, 24])
+    packet = ResponsePacket()
+    assert packet.initialize_from_data(frame("TESTFAN000000001", "", RESPONSE, body))
+    assert packet.humidity == 50
+    assert packet.temperature == 24
+
+
+def test_real_fan_status_reply_parses():
+    """Byte-for-byte status reply shape captured from a real fan (fw 2.2, unit type 6)."""
+    body = bytes.fromhex("01 01 02 00 03 00 fe 02 04 00 00 2e 32 31 18 fe 02 b9 06 00")
+    packet = ResponsePacket()
+    assert packet.initialize_from_data(frame("002700224746570A", "", RESPONSE, body))
+    assert (packet.is_on, packet.battery_status, packet.fan_speed) == (True, 0, 0)
+    assert (packet.humidity, packet.temperature, packet.unit_type) == (50, 24, 6)

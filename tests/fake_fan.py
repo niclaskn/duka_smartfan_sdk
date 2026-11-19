@@ -35,6 +35,8 @@ class FakeFan:
             0x86: bytes([1, 2, 19, 11]) + (2026).to_bytes(2, "little"),
             0xB9: (3).to_bytes(2, "little"),                 # unit type
         }
+        # Real fan (fw 2.2) answers these with the 0xFD "not supported" marker
+        self.unsupported = {0x0B, 0x12}
         self.extra_params = b""   # raw bytes appended to every reply
         self.drop_first = drop_first
         self.received: list[bytes] = []
@@ -76,8 +78,18 @@ class FakeFan:
                 self.state[param] = bytes([value])
         else:
             return None
-        known = b"".join(bytes([p]) + self.state[p] for p in params if p in self.state)
-        return known + self.extra_params
+        return b"".join(self._encode(p) for p in params) + self.extra_params
+
+    def _encode(self, param: int) -> bytes:
+        """Encode one field the way the real fan does (see tools/probe.py output)."""
+        if param in self.unsupported:
+            return bytes([0xFD, param])
+        if param not in self.state:
+            return b""
+        value = self.state[param]
+        if len(value) > 1:                 # multi-byte values carry the 0xFE size prefix
+            return bytes([0xFE, len(value), param]) + value
+        return bytes([param]) + value
 
     def _serve(self):
         while self._running:

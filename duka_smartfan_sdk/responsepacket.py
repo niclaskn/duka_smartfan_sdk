@@ -150,6 +150,10 @@ class ResponsePacket(DukaPacket):
         while self._pos < len(self._data) - 3:
             parameter = self.read_byte()
             size = 1
+            if parameter == 0xFD:
+                # "parameter not supported" marker: 0xFD <param>, no value follows
+                _LOGGER.debug("Device does not support parameter 0x%02X", self.read_byte())
+                continue
             if parameter == 0xFE:
                 # explicit size prefix: skip exactly `size` bytes, known or not
                 size = self.read_byte()
